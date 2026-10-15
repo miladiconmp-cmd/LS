@@ -1,0 +1,18 @@
+{
+  "name": "school-library-system",
+  "version": "1.0.0",
+  "description": "نظام إدارة المكتبة المدرسية الذكي",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "sqlite3": "^5.1.7"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "المطور",
+  "license": "ISC"
+}
