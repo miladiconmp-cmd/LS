@@ -4,28 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>المكتبة المدرسية</title>
-<style>
-:root{--bg:#f6f7f9;--card:#fff;--text:#1d2530;--muted:#6b7686;--line:#e2e6ec;--accent:#1f6feb;--ok:#1a7f4b;--bad:#b42318}
-@media(prefers-color-scheme:dark){:root{--bg:#12161c;--card:#1a2029;--text:#e7ebf0;--muted:#98a3b3;--line:#2a3340;--accent:#5b9dff;--ok:#4cc38a;--bad:#ff7b72}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,"Segoe UI",Tahoma,sans-serif;line-height:1.6}
-header{padding:20px 16px;text-align:center;border-bottom:1px solid var(--line);background:var(--card)}
-h1{margin:0;font-size:1.4rem} h2{margin:0 0 12px;font-size:1.1rem}
-main{max-width:960px;margin:0 auto;padding:16px;display:grid;gap:16px}
-section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
-input,select,button{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
-button{background:var(--accent);color:#fff;border:0;cursor:pointer}
-button.sec{background:transparent;color:var(--accent);border:1px solid var(--accent)}
-.row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
-.row>input,.row>select{flex:1 1 140px}
-.table{overflow-x:auto}
-table{width:100%;border-collapse:collapse;font-size:.95rem}
-th,td{padding:8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
-th{color:var(--muted);font-weight:600}
-.ok{color:var(--ok)} .bad{color:var(--bad)}
-#msg{min-height:1.5em;font-weight:600}
-.muted{color:var(--muted);font-size:.9rem}
-</style>
+<link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <header><h1>📚 نظام المكتبة المدرسية</h1></header>
@@ -35,7 +14,7 @@ th{color:var(--muted);font-weight:600}
   <h2>الكتب</h2>
   <div class="row">
     <input id="q" placeholder="ابحث بالعنوان أو المؤلف أو التصنيف">
-    <button onclick="loadBooks()">بحث</button>
+    <button id="searchBtn">بحث</button>
   </div>
   <div class="table"><table>
     <thead><tr><th>#</th><th>العنوان</th><th>المؤلف</th><th>التصنيف</th><th>المتاح</th></tr></thead>
@@ -48,7 +27,7 @@ th{color:var(--muted);font-weight:600}
   <h2>لوحة الإدارة</h2>
   <div class="row">
     <input id="key" type="password" placeholder="مفتاح الإدارة (ADMIN_API_KEY)" autocomplete="off">
-    <button class="sec" onclick="unlock()">دخول</button>
+    <button class="sec" id="unlockBtn">دخول</button>
   </div>
   <div id="msg"></div>
 
@@ -59,7 +38,7 @@ th{color:var(--muted);font-weight:600}
       <input id="a" placeholder="المؤلف">
       <input id="c" placeholder="التصنيف">
       <input id="n" type="number" min="0" value="1" placeholder="النسخ">
-      <button onclick="addBook()">إضافة</button>
+      <button id="addBtn">إضافة</button>
     </div>
 
     <h2>استعارة كتاب</h2>
@@ -67,7 +46,7 @@ th{color:var(--muted);font-weight:600}
       <select id="bsel"></select>
       <select id="usel"></select>
       <input id="days" type="number" min="1" max="90" value="14">
-      <button onclick="borrow()">استعارة</button>
+      <button id="borrowBtn">استعارة</button>
     </div>
 
     <h2>الإعارات النشطة</h2>
@@ -79,123 +58,6 @@ th{color:var(--muted);font-weight:600}
 </section>
 
 </main>
-<script>
-const $ = (id) => document.getElementById(id);
-
-function cell(tr, text) {
-  const td = document.createElement('td');
-  td.textContent = text ?? '';
-  tr.appendChild(td);
-  return td;
-}
-
-function say(text, ok = true) {
-  const m = $('msg');
-  m.textContent = text;
-  m.className = ok ? 'ok' : 'bad';
-}
-
-async function api(path, method = 'GET', body) {
-  const res = await fetch(path, {
-    method,
-    headers: { 'Content-Type': 'application/json', 'x-api-key': $('key').value },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'حدث خطأ');
-  return data;
-}
-
-async function loadBooks() {
-  try {
-    const r = await api('/api/books?limit=100&q=' + encodeURIComponent($('q').value));
-    const body = $('books');
-    body.replaceChildren();
-    r.data.forEach((b) => {
-      const tr = document.createElement('tr');
-      cell(tr, b.id); cell(tr, b.title); cell(tr, b.author); cell(tr, b.category);
-      const av = cell(tr, b.available_copies);
-      av.className = Number(b.available_copies) > 0 ? 'ok' : 'bad';
-      body.appendChild(tr);
-    });
-    $('count').textContent = `إجمالي النتائج: ${r.total}`;
-    if (!$('admin').hidden) fillBookSelect(r.data);
-  } catch (e) { say(e.message, false); }
-}
-
-function fillBookSelect(books) {
-  const s = $('bsel');
-  s.replaceChildren();
-  books.forEach((b) => s.add(new Option(`${b.title} (${b.available_copies})`, b.id)));
-}
-
-async function unlock() {
-  try {
-    const users = await api('/api/users');
-    $('admin').hidden = false;
-    const s = $('usel');
-    s.replaceChildren();
-    users.forEach((u) => s.add(new Option(u.name, u.id)));
-    say('تم تسجيل الدخول');
-    await loadBooks();
-    await loadLoans();
-  } catch (e) { say(e.message, false); }
-}
-
-async function addBook() {
-  try {
-    await api('/api/books', 'POST', {
-      title: $('t').value, author: $('a').value,
-      category: $('c').value, copies: Number($('n').value),
-    });
-    say('تمت إضافة الكتاب');
-    ['t', 'a', 'c'].forEach((i) => ($(i).value = ''));
-    loadBooks();
-  } catch (e) { say(e.message, false); }
-}
-
-async function borrow() {
-  try {
-    await api('/api/loans', 'POST', {
-      book_id: Number($('bsel').value),
-      user_id: Number($('usel').value),
-      days: Number($('days').value),
-    });
-    say('تمت الاستعارة');
-    loadBooks(); loadLoans();
-  } catch (e) { say(e.message, false); }
-}
-
-async function loadLoans() {
-  try {
-    const loans = await api('/api/loans?status=active');
-    const body = $('loans');
-    body.replaceChildren();
-    loans.forEach((l) => {
-      const tr = document.createElement('tr');
-      cell(tr, l.book_title); cell(tr, l.user_name);
-      const due = cell(tr, new Date(l.due_date).toLocaleDateString('ar-EG'));
-      if (new Date(l.due_date) < new Date()) due.className = 'bad';
-      const td = document.createElement('td');
-      const b = document.createElement('button');
-      b.className = 'sec'; b.textContent = 'إرجاع';
-      b.onclick = () => returnLoan(l.id);
-      td.appendChild(b); tr.appendChild(td);
-      body.appendChild(tr);
-    });
-  } catch (e) { say(e.message, false); }
-}
-
-async function returnLoan(id) {
-  try {
-    await api(`/api/loans/${id}/return`, 'POST');
-    say('تم الإرجاع');
-    loadBooks(); loadLoans();
-  } catch (e) { say(e.message, false); }
-}
-
-$('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadBooks(); });
-loadBooks();
-</script>
+<script src="/app.js"></script>
 </body>
 </html>
