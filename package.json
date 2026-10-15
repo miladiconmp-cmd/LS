@@ -1,24 +1,19 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "api/index.js",
-      "use": "@vercel/node"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "api/index.js"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/public/$1",
-      "continue": true
-    },
-    {
-      "src": "/",
-      "dest": "/public/index.html"
-    }
-  ]
+  "name": "school-library-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "نظام إدارة المكتبة المدرسية الذكي لـ Vercel",
+  "main": "api/index.js",
+  "scripts": {
+    "start": "node api/index.js",
+    "dev": "node --watch api/index.js"
+  },
+  "engines": {
+    "node": "20.x"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.14.0",
+    "express": "^4.19.2",
+    "helmet": "^7.1.0"
+  }
 }
