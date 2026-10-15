@@ -1,338 +1,201 @@
-const express = require('express');
-const crypto = require('crypto');
-const { createClient } = require('@libsql/client');
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>المكتبة المدرسية</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--text:#1d2530;--muted:#6b7686;--line:#e2e6ec;--accent:#1f6feb;--ok:#1a7f4b;--bad:#b42318}
+@media(prefers-color-scheme:dark){:root{--bg:#12161c;--card:#1a2029;--text:#e7ebf0;--muted:#98a3b3;--line:#2a3340;--accent:#5b9dff;--ok:#4cc38a;--bad:#ff7b72}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,"Segoe UI",Tahoma,sans-serif;line-height:1.6}
+header{padding:20px 16px;text-align:center;border-bottom:1px solid var(--line);background:var(--card)}
+h1{margin:0;font-size:1.4rem} h2{margin:0 0 12px;font-size:1.1rem}
+main{max-width:960px;margin:0 auto;padding:16px;display:grid;gap:16px}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+input,select,button{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
+button{background:var(--accent);color:#fff;border:0;cursor:pointer}
+button.sec{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.row>input,.row>select{flex:1 1 140px}
+.table{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.95rem}
+th,td{padding:8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--muted);font-weight:600}
+.ok{color:var(--ok)} .bad{color:var(--bad)}
+#msg{min-height:1.5em;font-weight:600}
+.muted{color:var(--muted);font-size:.9rem}
+</style>
+</head>
+<body>
+<header><h1>📚 نظام المكتبة المدرسية</h1></header>
+<main>
 
-const app = express();
-app.use(express.json({ limit: '100kb' }));
+<section>
+  <h2>الكتب</h2>
+  <div class="row">
+    <input id="q" placeholder="ابحث بالعنوان أو المؤلف أو التصنيف">
+    <button onclick="loadBooks()">بحث</button>
+  </div>
+  <div class="table"><table>
+    <thead><tr><th>#</th><th>العنوان</th><th>المؤلف</th><th>التصنيف</th><th>المتاح</th></tr></thead>
+    <tbody id="books"></tbody>
+  </table></div>
+  <p class="muted" id="count"></p>
+</section>
 
-const db = createClient({
-  url: process.env.TURSO_DATABASE_URL || 'file:local.db',
-  authToken: process.env.TURSO_AUTH_TOKEN,
-});
+<section>
+  <h2>لوحة الإدارة</h2>
+  <div class="row">
+    <input id="key" type="password" placeholder="مفتاح الإدارة (ADMIN_API_KEY)" autocomplete="off">
+    <button class="sec" onclick="unlock()">دخول</button>
+  </div>
+  <div id="msg"></div>
 
-class HttpError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
+  <div id="admin" hidden>
+    <h2>إضافة كتاب</h2>
+    <div class="row">
+      <input id="t" placeholder="العنوان">
+      <input id="a" placeholder="المؤلف">
+      <input id="c" placeholder="التصنيف">
+      <input id="n" type="number" min="0" value="1" placeholder="النسخ">
+      <button onclick="addBook()">إضافة</button>
+    </div>
+
+    <h2>استعارة كتاب</h2>
+    <div class="row">
+      <select id="bsel"></select>
+      <select id="usel"></select>
+      <input id="days" type="number" min="1" max="90" value="14">
+      <button onclick="borrow()">استعارة</button>
+    </div>
+
+    <h2>الإعارات النشطة</h2>
+    <div class="table"><table>
+      <thead><tr><th>الكتاب</th><th>المستعير</th><th>الاستحقاق</th><th></th></tr></thead>
+      <tbody id="loans"></tbody>
+    </table></div>
+  </div>
+</section>
+
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+
+function cell(tr, text) {
+  const td = document.createElement('td');
+  td.textContent = text ?? '';
+  tr.appendChild(td);
+  return td;
 }
 
-/* ---------- التهيئة ---------- */
-let initPromise;
-function init() {
-  if (!initPromise) {
-    initPromise = (async () => {
-      await db.batch([
-        `CREATE TABLE IF NOT EXISTS users (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          role TEXT NOT NULL,
-          status TEXT NOT NULL DEFAULT 'نشط'
-        )`,
-        `CREATE TABLE IF NOT EXISTS books (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          title TEXT NOT NULL,
-          author TEXT NOT NULL,
-          category TEXT,
-          available_copies INTEGER NOT NULL DEFAULT 1
-        )`,
-        `CREATE TABLE IF NOT EXISTS loans (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          book_id INTEGER NOT NULL,
-          user_id INTEGER NOT NULL,
-          borrowed_at TEXT NOT NULL,
-          due_date TEXT NOT NULL,
-          returned_at TEXT,
-          FOREIGN KEY (book_id) REFERENCES books(id),
-          FOREIGN KEY (user_id) REFERENCES users(id)
-        )`,
-        `CREATE INDEX IF NOT EXISTS idx_loans_active ON loans(book_id, returned_at)`,
-      ]);
-
-      const u = await db.execute('SELECT COUNT(*) AS c FROM users');
-      if (Number(u.rows[0].c) === 0) {
-        await db.batch([
-          { sql: 'INSERT INTO users (name, role) VALUES (?, ?)', args: ['أستاذ أحمد علي', 'مدير نظام'] },
-          { sql: 'INSERT INTO users (name, role) VALUES (?, ?)', args: ['سارة محمود', 'مساعد أمين مكتبة'] },
-        ]);
-      }
-      const b = await db.execute('SELECT COUNT(*) AS c FROM books');
-      if (Number(b.rows[0].c) === 0) {
-        await db.batch([
-          { sql: 'INSERT INTO books (title, author, category, available_copies) VALUES (?, ?, ?, ?)', args: ['مقدمة في الذكاء الاصطناعي', 'د. خالد وليد', 'علوم', 5] },
-          { sql: 'INSERT INTO books (title, author, category, available_copies) VALUES (?, ?, ?, ?)', args: ['تاريخ مصر الحديث', 'أحمد زكي', 'تاريخ', 3] },
-        ]);
-      }
-    })().catch((err) => {
-      initPromise = null;
-      throw err;
-    });
-  }
-  return initPromise;
+function say(text, ok = true) {
+  const m = $('msg');
+  m.textContent = text;
+  m.className = ok ? 'ok' : 'bad';
 }
 
-/* ---------- أدوات مساعدة ---------- */
-const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-
-const sha = (s) => crypto.createHash('sha256').update(String(s)).digest();
-
-// حماية بمفتاح API في الترويسة: x-api-key
-function requireAuth(req, res, next) {
-  const expected = process.env.ADMIN_API_KEY;
-  if (!expected) return next(new HttpError(500, 'لم يتم ضبط مفتاح الإدارة على الخادم'));
-  const provided = req.get('x-api-key') || '';
-  if (!crypto.timingSafeEqual(sha(provided), sha(expected))) {
-    return next(new HttpError(401, 'غير مصرح'));
-  }
-  next();
+async function api(path, method = 'GET', body) {
+  const res = await fetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json', 'x-api-key': $('key').value },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'حدث خطأ');
+  return data;
 }
 
-function parseId(value, label = 'المعرّف') {
-  const n = Number(value);
-  if (!Number.isInteger(n) || n <= 0) throw new HttpError(400, `${label} غير صالح`);
-  return n;
-}
-
-function cleanString(value, label, { required = false, max = 200 } = {}) {
-  if (value === undefined || value === null || value === '') {
-    if (required) throw new HttpError(400, `${label} مطلوب`);
-    return null;
-  }
-  if (typeof value !== 'string') throw new HttpError(400, `${label} يجب أن يكون نصًا`);
-  const v = value.trim();
-  if (required && !v) throw new HttpError(400, `${label} مطلوب`);
-  if (v.length > max) throw new HttpError(400, `${label} طويل جدًا`);
-  return v || null;
-}
-
-function cleanCopies(value, fallback = 1) {
-  if (value === undefined) return fallback;
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 0 || n > 10000) {
-    throw new HttpError(400, 'عدد النسخ يجب أن يكون رقمًا صحيحًا غير سالب');
-  }
-  return n;
-}
-
-// يشغّل دالة داخل معاملة (transaction) مع تراجع تلقائي عند الخطأ
-async function inTransaction(fn) {
-  const tx = await db.transaction('write');
+async function loadBooks() {
   try {
-    const result = await fn(tx);
-    await tx.commit();
-    return result;
-  } catch (err) {
-    await tx.rollback();
-    throw err;
-  } finally {
-    tx.close();
-  }
+    const r = await api('/api/books?limit=100&q=' + encodeURIComponent($('q').value));
+    const body = $('books');
+    body.replaceChildren();
+    r.data.forEach((b) => {
+      const tr = document.createElement('tr');
+      cell(tr, b.id); cell(tr, b.title); cell(tr, b.author); cell(tr, b.category);
+      const av = cell(tr, b.available_copies);
+      av.className = Number(b.available_copies) > 0 ? 'ok' : 'bad';
+      body.appendChild(tr);
+    });
+    $('count').textContent = `إجمالي النتائج: ${r.total}`;
+    if (!$('admin').hidden) fillBookSelect(r.data);
+  } catch (e) { say(e.message, false); }
 }
 
-/* ---------- الوسائط ---------- */
-app.use('/api', wrap(async (req, res, next) => {
-  await init();
-  next();
-}));
-
-/* ---------- الكتب ---------- */
-// عام: بحث وترقيم   GET /api/books?q=كلمة&page=1&limit=20
-app.get('/api/books', wrap(async (req, res) => {
-  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
-  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
-
-  const where = q ? 'WHERE title LIKE ? OR author LIKE ? OR category LIKE ?' : '';
-  const like = `%${q}%`;
-  const filterArgs = q ? [like, like, like] : [];
-
-  const total = await db.execute({ sql: `SELECT COUNT(*) AS c FROM books ${where}`, args: filterArgs });
-  const rows = await db.execute({
-    sql: `SELECT * FROM books ${where} ORDER BY id DESC LIMIT ? OFFSET ?`,
-    args: [...filterArgs, limit, (page - 1) * limit],
-  });
-
-  res.json({
-    page,
-    limit,
-    total: Number(total.rows[0].c),
-    data: rows.rows,
-  });
-}));
-
-app.get('/api/books/:id', wrap(async (req, res) => {
-  const id = parseId(req.params.id);
-  const r = await db.execute({ sql: 'SELECT * FROM books WHERE id = ?', args: [id] });
-  if (!r.rows.length) throw new HttpError(404, 'الكتاب غير موجود');
-  res.json(r.rows[0]);
-}));
-
-app.post('/api/books', requireAuth, wrap(async (req, res) => {
-  const body = req.body || {};
-  const title = cleanString(body.title, 'عنوان الكتاب', { required: true });
-  const author = cleanString(body.author, 'اسم المؤلف', { required: true });
-  const category = cleanString(body.category, 'التصنيف', { max: 100 });
-  const copies = cleanCopies(body.copies);
-
-  const r = await db.execute({
-    sql: 'INSERT INTO books (title, author, category, available_copies) VALUES (?, ?, ?, ?)',
-    args: [title, author, category, copies],
-  });
-  res.status(201).json({ id: Number(r.lastInsertRowid), message: 'تم إضافة الكتاب بنجاح' });
-}));
-
-app.put('/api/books/:id', requireAuth, wrap(async (req, res) => {
-  const id = parseId(req.params.id);
-  const body = req.body || {};
-  const title = cleanString(body.title, 'عنوان الكتاب', { required: true });
-  const author = cleanString(body.author, 'اسم المؤلف', { required: true });
-  const category = cleanString(body.category, 'التصنيف', { max: 100 });
-  const copies = cleanCopies(body.copies, null);
-
-  const r = await db.execute({
-    sql: `UPDATE books
-          SET title = ?, author = ?, category = ?,
-              available_copies = COALESCE(?, available_copies)
-          WHERE id = ?`,
-    args: [title, author, category, copies, id],
-  });
-  if (r.rowsAffected === 0) throw new HttpError(404, 'الكتاب غير موجود');
-  res.json({ message: 'تم تحديث الكتاب بنجاح' });
-}));
-
-app.delete('/api/books/:id', requireAuth, wrap(async (req, res) => {
-  const id = parseId(req.params.id);
-  const active = await db.execute({
-    sql: 'SELECT COUNT(*) AS c FROM loans WHERE book_id = ? AND returned_at IS NULL',
-    args: [id],
-  });
-  if (Number(active.rows[0].c) > 0) {
-    throw new HttpError(409, 'لا يمكن حذف كتاب لديه إعارات نشطة');
-  }
-  const r = await db.execute({ sql: 'DELETE FROM books WHERE id = ?', args: [id] });
-  if (r.rowsAffected === 0) throw new HttpError(404, 'الكتاب غير موجود');
-  res.json({ message: 'تم حذف الكتاب' });
-}));
-
-/* ---------- المستخدمون (محمية) ---------- */
-app.get('/api/users', requireAuth, wrap(async (req, res) => {
-  const r = await db.execute('SELECT * FROM users ORDER BY id');
-  res.json(r.rows);
-}));
-
-app.post('/api/users', requireAuth, wrap(async (req, res) => {
-  const body = req.body || {};
-  const name = cleanString(body.name, 'الاسم', { required: true });
-  const role = cleanString(body.role, 'الدور', { required: true, max: 50 });
-  const r = await db.execute({
-    sql: 'INSERT INTO users (name, role) VALUES (?, ?)',
-    args: [name, role],
-  });
-  res.status(201).json({ id: Number(r.lastInsertRowid), message: 'تم إضافة المستخدم' });
-}));
-
-/* ---------- الإعارات (محمية) ---------- */
-// GET /api/loans?status=active|returned|overdue
-app.get('/api/loans', requireAuth, wrap(async (req, res) => {
-  const now = new Date().toISOString();
-  const filters = {
-    active: 'WHERE l.returned_at IS NULL',
-    returned: 'WHERE l.returned_at IS NOT NULL',
-    overdue: 'WHERE l.returned_at IS NULL AND l.due_date < ?',
-  };
-  const status = req.query.status;
-  const where = filters[status] || '';
-  const args = status === 'overdue' ? [now] : [];
-
-  const r = await db.execute({
-    sql: `SELECT l.*, b.title AS book_title, u.name AS user_name
-          FROM loans l
-          JOIN books b ON b.id = l.book_id
-          JOIN users u ON u.id = l.user_id
-          ${where}
-          ORDER BY l.id DESC LIMIT 200`,
-    args,
-  });
-  res.json(r.rows);
-}));
-
-// استعارة: { "book_id": 1, "user_id": 2, "days": 14 }
-app.post('/api/loans', requireAuth, wrap(async (req, res) => {
-  const body = req.body || {};
-  const bookId = parseId(body.book_id, 'معرّف الكتاب');
-  const userId = parseId(body.user_id, 'معرّف المستخدم');
-  const days = body.days === undefined ? 14 : Number(body.days);
-  if (!Number.isInteger(days) || days < 1 || days > 90) {
-    throw new HttpError(400, 'مدة الإعارة يجب أن تكون بين 1 و90 يومًا');
-  }
-
-  const loanId = await inTransaction(async (tx) => {
-    const user = await tx.execute({ sql: 'SELECT status FROM users WHERE id = ?', args: [userId] });
-    if (!user.rows.length) throw new HttpError(404, 'المستخدم غير موجود');
-    if (user.rows[0].status !== 'نشط') throw new HttpError(403, 'حساب المستخدم غير نشط');
-
-    // خصم نسخة بشكل ذري: ينجح فقط إذا كانت هناك نسخة متاحة
-    const dec = await tx.execute({
-      sql: 'UPDATE books SET available_copies = available_copies - 1 WHERE id = ? AND available_copies > 0',
-      args: [bookId],
-    });
-    if (dec.rowsAffected === 0) {
-      const exists = await tx.execute({ sql: 'SELECT 1 FROM books WHERE id = ?', args: [bookId] });
-      throw exists.rows.length
-        ? new HttpError(409, 'لا توجد نسخ متاحة من هذا الكتاب حاليًا')
-        : new HttpError(404, 'الكتاب غير موجود');
-    }
-
-    const borrowed = new Date();
-    const due = new Date(borrowed.getTime() + days * 24 * 60 * 60 * 1000);
-    const ins = await tx.execute({
-      sql: 'INSERT INTO loans (book_id, user_id, borrowed_at, due_date) VALUES (?, ?, ?, ?)',
-      args: [bookId, userId, borrowed.toISOString(), due.toISOString()],
-    });
-    return Number(ins.lastInsertRowid);
-  });
-
-  res.status(201).json({ id: loanId, message: 'تمت الاستعارة بنجاح' });
-}));
-
-// إرجاع
-app.post('/api/loans/:id/return', requireAuth, wrap(async (req, res) => {
-  const id = parseId(req.params.id);
-
-  await inTransaction(async (tx) => {
-    // يضمن عدم الإرجاع مرتين: التحديث ينجح فقط إن لم تُرجع بعد
-    const upd = await tx.execute({
-      sql: 'UPDATE loans SET returned_at = ? WHERE id = ? AND returned_at IS NULL',
-      args: [new Date().toISOString(), id],
-    });
-    if (upd.rowsAffected === 0) {
-      const exists = await tx.execute({ sql: 'SELECT 1 FROM loans WHERE id = ?', args: [id] });
-      throw exists.rows.length
-        ? new HttpError(409, 'تم إرجاع هذا الكتاب مسبقًا')
-        : new HttpError(404, 'الإعارة غير موجودة');
-    }
-    await tx.execute({
-      sql: 'UPDATE books SET available_copies = available_copies + 1 WHERE id = (SELECT book_id FROM loans WHERE id = ?)',
-      args: [id],
-    });
-  });
-
-  res.json({ message: 'تم إرجاع الكتاب بنجاح' });
-}));
-
-/* ---------- 404 ومعالج الأخطاء ---------- */
-app.use((req, res) => res.status(404).json({ error: 'المسار غير موجود' }));
-
-app.use((err, req, res, next) => {
-  if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
-  if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'صيغة JSON غير صحيحة' });
-  console.error(err);
-  res.status(500).json({ error: 'حدث خطأ في الخادم' });
-});
-
-if (require.main === module) {
-  const port = process.env.PORT || 3000;
-  app.listen(port, () => console.log(`الخادم يعمل على المنفذ ${port}`));
+function fillBookSelect(books) {
+  const s = $('bsel');
+  s.replaceChildren();
+  books.forEach((b) => s.add(new Option(`${b.title} (${b.available_copies})`, b.id)));
 }
 
-module.exports = app;
+async function unlock() {
+  try {
+    const users = await api('/api/users');
+    $('admin').hidden = false;
+    const s = $('usel');
+    s.replaceChildren();
+    users.forEach((u) => s.add(new Option(u.name, u.id)));
+    say('تم تسجيل الدخول');
+    await loadBooks();
+    await loadLoans();
+  } catch (e) { say(e.message, false); }
+}
+
+async function addBook() {
+  try {
+    await api('/api/books', 'POST', {
+      title: $('t').value, author: $('a').value,
+      category: $('c').value, copies: Number($('n').value),
+    });
+    say('تمت إضافة الكتاب');
+    ['t', 'a', 'c'].forEach((i) => ($(i).value = ''));
+    loadBooks();
+  } catch (e) { say(e.message, false); }
+}
+
+async function borrow() {
+  try {
+    await api('/api/loans', 'POST', {
+      book_id: Number($('bsel').value),
+      user_id: Number($('usel').value),
+      days: Number($('days').value),
+    });
+    say('تمت الاستعارة');
+    loadBooks(); loadLoans();
+  } catch (e) { say(e.message, false); }
+}
+
+async function loadLoans() {
+  try {
+    const loans = await api('/api/loans?status=active');
+    const body = $('loans');
+    body.replaceChildren();
+    loans.forEach((l) => {
+      const tr = document.createElement('tr');
+      cell(tr, l.book_title); cell(tr, l.user_name);
+      const due = cell(tr, new Date(l.due_date).toLocaleDateString('ar-EG'));
+      if (new Date(l.due_date) < new Date()) due.className = 'bad';
+      const td = document.createElement('td');
+      const b = document.createElement('button');
+      b.className = 'sec'; b.textContent = 'إرجاع';
+      b.onclick = () => returnLoan(l.id);
+      td.appendChild(b); tr.appendChild(td);
+      body.appendChild(tr);
+    });
+  } catch (e) { say(e.message, false); }
+}
+
+async function returnLoan(id) {
+  try {
+    await api(`/api/loans/${id}/return`, 'POST');
+    say('تم الإرجاع');
+    loadBooks(); loadLoans();
+  } catch (e) { say(e.message, false); }
+}
+
+$('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadBooks(); });
+loadBooks();
+</script>
+</body>
+</html>
